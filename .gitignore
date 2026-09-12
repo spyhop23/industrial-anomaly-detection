@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MVTec dataset
+data/
+*.tar.xz
+
+# model artifacts / experiment tracking
+*.pth
+*.onnx
+*.engine
+mlruns/
+checkpoints/
