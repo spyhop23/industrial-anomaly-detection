@@ -4,7 +4,7 @@
 
 로컬 환경을 처음부터 세팅하는 과정에서 겪은 문제들과, 그중 가장 치명적이었던 "정상/이상 구분이 전혀 안 되던" 버그의 원인을 정리한다.
 
-## 1. 로컬 Python 환경 세팅 과정에서의 삽질들
+## 1. 로컬 Python 환경 세팅 과정에서의 시행착오
 
 - **Windows Python 설치 경로 변경**: 최근 python.org 설치 프로그램은 개별 버전 설치가 아니라 "Python Install Manager"를 통해 여러 버전을 관리하는 방식으로 바뀌었다. `py install 3.12`, `py list`로 버전을 확인/설치해야 했다.
 - **PowerShell 실행 정책**: venv 활성화 스크립트(`venv\Scripts\Activate.ps1`)가 기본 보안 정책에 막혀 실행이 안 됐다. `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`로 해결.
@@ -66,8 +66,54 @@ arr = np.array(image, dtype=np.float32) / 255.0  # 스케일링만, 추가 정�
 
 전처리를 고친 뒤에도 `anomaly_score`가 0.5 근처(0.49~0.68)에 몰려 있어서 "분류 성능이 떨어진 것 아닌가" 걱정했었는데, 이건 정상이다. 4주차 평가에서 본 "0 또는 1에 가까운" 점수는 anomalib이 검증 데이터셋 통계로 min-max 정규화를 거친 값이고, 로컬 ONNX Runtime에서 직접 받는 `pred_score`는 그 정규화 이전의 원시 점수다. 중요한 건 점수의 절대적 크기가 아니라 **`pred_label`(모델에 내장된 threshold로 이미 비교된 최종 판정)이 정확한가**이며, 이 부분은 4장 전부 정확했다.
 
+## 5. 드리프트(drift) 감지 기능 테스트
+
+서빙 API에 최근 N건(윈도우 크기 20)의 `is_anomaly` 판정 비율을 추적해서, 비율이 임계값(50%)을 넘으면 `possible_drift` 경고를 로그에 남기고 `/drift-status`에서 `drift_detected`를 반환하도록 구현해뒀는데, 이 로직이 실제로 의도대로 동작하는지 로컬에서 직접 검증했다.
+
+**테스트 절차**
+
+1. 서버를 `uvicorn app:app --reload --port 8000`으로 띄운 상태에서, 먼저 `GET /drift-status`를 호출해 베이스라인을 확인.
+2. `bottle_good.png`(정상 이미지)를 `/inspect`에 20회 연속 업로드.
+3. 다시 `GET /drift-status` 호출.
+4. `bottle_bad.png`(결함 이미지)를 15회 연속 업로드해 윈도우 내 이상 비율을 끌어올림.
+5. `GET /drift-status`와 `logs/requests.log`를 확인.
+
+반복 요청은 PowerShell에서 아래 방식으로 보냈다:
+
+```powershell
+1..20 | ForEach-Object {
+    curl.exe -X POST "http://127.0.0.1:8000/inspect" -F "file=@bottle_good.png;type=image/png"
+}
+```
+
+**결과**
+
+| 단계 | `/drift-status` 응답 |
+|---|---|
+| 베이스라인 (요청 0건) | `{"status": "insufficient_data", "collected": 0, "needed": 20}` |
+| 정상 이미지 20건 | `{"status": "normal", "recent_anomaly_rate": 0.0, "window_size": 20, "threshold": 0.5}` |
+| 결함 이미지 15건 추가 | `{"status": "drift_detected", "recent_anomaly_rate": 0.75, "window_size": 20, "threshold": 0.5}` |
+
+슬라이딩 윈도우(최근 20건 기준)가 요청마다 실시간으로 갱신되는 것도 로그에서 직접 확인됐다. 결함 이미지가 쌓이면서 `recent_anomaly_rate`가 11번째 요청(윈도우 내 이상 비율이 55%로 임계값 50%를 처음 넘긴 시점)부터 `possible_drift` 경고를 매 요청마다 남겼다:
+
+```json
+{"timestamp": "2026-10-16T14:24:10", "level": "warning", "event": "possible_drift", "anomaly_rate": 0.55, "window_size": 20, "message": "최근 요청 중 이상 판정 비율이 비정상적으로 높습니다. 카메라/조명/제품 라인 변화를 확인하세요."}
+{"timestamp": "2026-10-16T14:24:10", "level": "warning", "event": "possible_drift", "anomaly_rate": 0.6,  "window_size": 20, "message": "..."}
+{"timestamp": "2026-10-16T14:24:11", "level": "warning", "event": "possible_drift", "anomaly_rate": 0.65, "window_size": 20, "message": "..."}
+{"timestamp": "2026-10-16T14:24:12", "level": "warning", "event": "possible_drift", "anomaly_rate": 0.7,  "window_size": 20, "message": "..."}
+{"timestamp": "2026-10-16T14:24:12", "level": "warning", "event": "possible_drift", "anomaly_rate": 0.75, "window_size": 20, "message": "..."}
+```
+
+**확인된 점**
+
+- 윈도우 집계(`collected`/`window_size`)가 요청 건수를 정확히 추적함.
+- 정상 이미지만 들어올 때는 `recent_anomaly_rate`가 0으로 유지되어 불필요한 경고가 발생하지 않음.
+- 이상 비율이 임계값(0.5)을 넘는 순간부터 매 요청마다 `possible_drift` 경고가 로그에 기록되고, `/drift-status`의 상태도 `drift_detected`로 즉시 전환됨.
+- 실제 운영 환경에서 카메라/조명/제품 라인 변화로 이상 탐지 비율이 비정상적으로 치솟는 상황을 조기에 감지할 수 있는 최소 기능 수준의 모니터링이 로컬에서 의도대로 동작함을 확인.
+
 ## 최종 결과
 
 - FastAPI 서버(`/health`, `/inspect`)가 로컬에서 정상 기동
 - ONNX Runtime(CPU) 기반 추론이 정상/결함 이미지를 정확히 구분
 - 레이턴시는 아직 정밀 측정 전이지만, GPU 없이 CPU 추론만으로 실시간 API 서빙이 가능한 수준임을 확인
+- 드리프트 감지 기능(슬라이딩 윈도우 기반 이상 비율 모니터링 + 로그 경고)이 설계한 대로 정상 동작함을 로컬 테스트로 검증 완료
