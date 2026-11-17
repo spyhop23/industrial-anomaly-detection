@@ -13,6 +13,7 @@ import mlflow
 from anomalib.data import MVTecAD
 from anomalib.engine import Engine
 from anomalib.models import Patchcore, Padim, EfficientAd
+from lightning.pytorch import seed_everything
 from lightning.pytorch.callbacks import TQDMProgressBar
 
 MODEL_REGISTRY = {
@@ -41,6 +42,7 @@ def parse_args():
                          help="Preferred over max_epochs for EfficientAD (small per-category datasets)")
     parser.add_argument("--mlflow_db", type=str, default="mlflow.db")
     parser.add_argument("--experiment_name", type=str, default="mvtec-anomaly-detection")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     return parser.parse_args()
 
 
@@ -78,6 +80,7 @@ def measure_inference_latency(model, datamodule, n_images=50):
 
 
 def train_and_evaluate(args):
+    seed_everything(args.seed, workers=True)
     train_bs = args.train_batch_size or MODEL_DEFAULT_BATCH_SIZE[args.model]
 
     datamodule = MVTecAD(
@@ -124,6 +127,7 @@ def log_to_mlflow(args, test_results, train_time, latency_ms, train_bs):
         mlflow.log_param("train_batch_size", train_bs)
         mlflow.log_param("max_epochs", args.max_epochs)
         mlflow.log_param("max_steps", args.max_steps)
+        mlflow.log_param("seed", args.seed)
         mlflow.log_metric("train_time_sec", train_time)
         mlflow.log_metric("inference_latency_ms", latency_ms)
         for key, value in test_results.items():

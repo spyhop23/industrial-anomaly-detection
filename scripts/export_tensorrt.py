@@ -4,14 +4,27 @@ Week 4 - EfficientAD TensorRT FP16 optimization
 PyTorch checkpoint -> ONNX -> FP16 ONNX -> TensorRT engine 변환 후,
 원본 PyTorch(FP32) 모델과 TensorRT(FP16) 엔진의 레이턴시/정확도(AUROC)/모델 크기를 비교한다.
 
-주의: 이 스크립트는 Kaggle 노트북에서 실행했던 코드를 정리한 것으로,
-CHECKPOINTS / DATA_ROOT 경로는 실행 환경에 맞게 수정해야 한다.
-(Kaggle 전용 경로이므로 로컬/다른 환경에서는 그대로 동작하지 않는다.)
+Kaggle 노트북에서 실행했던 코드를 정리한 것으로, 경로는 모두 명령행 인자로 받는다.
+NVIDIA GPU + TensorRT 10 이상 환경이 필요하다.
+
+사용법:
+    python scripts/export_tensorrt.py \
+        --data_root /path/to/mvtec_ad \
+        --export_dir ./exported \
+        --ckpt bottle=/path/to/bottle/model.ckpt \
+        --ckpt capsule=/path/to/capsule/model.ckpt
+
+    (당시 Kaggle 실행 예: --data_root /kaggle/working/mvtec_ad --export_dir /kaggle/working/exported
+     --mlflow_db /kaggle/working/week4_mlflow.db)
+
+결과물: <export_dir>/<category>/ 아래에 ONNX(FP32), ONNX(FP16), TensorRT FP16 엔진.
+서빙(serving/app.py)에는 FP32 ONNX를 serving/models/<category>_model.onnx 로 복사해서 사용한다.
 
 필요 패키지:
     pip install anomalib mlflow lightning tensorrt onnx onnxscript onnxconverter-common
 """
 
+import argparse
 import os
 import time
 
@@ -31,16 +44,31 @@ from anomalib.engine import Engine
 from anomalib.models import EfficientAd
 
 # ---------------------------------------------------------------------------
-# 설정 (환경에 맞게 수정)
+# 설정 (parse_args()에서 채운다)
 # ---------------------------------------------------------------------------
-DATA_ROOT = "/kaggle/working/mvtec_ad"
-EXPORT_DIR = "/kaggle/working/exported"
-os.makedirs(EXPORT_DIR, exist_ok=True)
+DATA_ROOT = None
+EXPORT_DIR = None
+CHECKPOINTS: dict = {}
 
-CHECKPOINTS = {
-    "bottle": "/kaggle/input/notebooks/spyhop/03-multi-category-experiments/results/EfficientAd/MVTecAD/bottle/v0/weights/lightning/model.ckpt",
-    "capsule": "/kaggle/input/notebooks/spyhop/03-efficientad-highstep-ablation/results/EfficientAd/MVTecAD/capsule/v0/weights/lightning/model.ckpt",
-}
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="EfficientAD -> ONNX -> TensorRT FP16 변환 및 벤치마크")
+    parser.add_argument("--data_root", required=True, help="MVTec AD 데이터셋 루트 경로")
+    parser.add_argument("--export_dir", default="exported", help="ONNX/엔진 저장 폴더")
+    parser.add_argument("--ckpt", action="append", required=True, metavar="CATEGORY=PATH",
+                        help="카테고리별 Lightning 체크포인트 (여러 번 지정 가능)")
+    parser.add_argument("--mlflow_db", default="week4_mlflow.db", help="MLflow sqlite 파일 경로")
+    args = parser.parse_args()
+
+    checkpoints = {}
+    for item in args.ckpt:
+        if "=" not in item:
+            parser.error(f"--ckpt 형식은 CATEGORY=PATH 입니다: {item}")
+        category, path = item.split("=", 1)
+        checkpoints[category.strip()] = path.strip()
+    args.checkpoints = checkpoints
+    return args
+
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
@@ -317,6 +345,12 @@ def main():
 
 
 if __name__ == "__main__":
-    mlflow.set_tracking_uri("sqlite:////kaggle/working/week4_mlflow.db")
+    args = parse_args()
+    DATA_ROOT = args.data_root
+    EXPORT_DIR = args.export_dir
+    CHECKPOINTS = args.checkpoints
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+
+    mlflow.set_tracking_uri(f"sqlite:///{os.path.abspath(args.mlflow_db)}")
     mlflow.set_experiment("week4-tensorrt-optimization")
     main()

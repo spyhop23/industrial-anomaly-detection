@@ -1,7 +1,7 @@
-fastapi
-uvicorn[standard]
-onnxruntime
-pillow
-numpy
-python-multipart
-requests
+fastapi>=0.110
+uvicorn[standard]>=0.29
+onnxruntime>=1.17
+pillow>=10.0
+numpy>=1.26
+python-multipart>=0.0.9
+requests>=2.31
