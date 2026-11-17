@@ -11,6 +11,8 @@ inspect_image_tool / query_experiment_results_tool 두 개를 LangChain 에이�
 실행 전 준비:
     1. serving/agent 폴더에서: pip install -r ../requirements.txt -r requirements-agent.txt
     2. .env.example을 복사해 .env 파일을 만들고 OPENAI_API_KEY=sk-... 설정
+    3. serving/ 폴더에서 추론 서버 실행: uvicorn app:app --port 8000
+       (inspect_image_tool이 서버의 /inspect 를 호출한다)
 
 실행 (반드시 serving/agent 폴더 안에서):
     cd serving/agent

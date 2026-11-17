@@ -12,9 +12,13 @@
     2. .env.example을 복사해 .env 파일을 만들고 OPENAI_API_KEY=sk-... 설정
        (이미 serving/agent/.env를 만들어뒀다면 그 내용을 그대로 복사해도 된다)
 
+    3. serving/ 폴더에서 추론 서버 실행: uvicorn app:app --port 8000
+       (검사 에이전트의 inspect_image 도구가 서버의 /inspect 를 호출한다)
+
 실행 (반드시 serving/crew 폴더 안에서):
     cd serving/crew
-    python crew_pipeline.py ../bottle_bad.png
+    python crew_pipeline.py /path/to/mvtec_ad/bottle/test/broken_large/000.png
+    python crew_pipeline.py /path/to/mvtec_ad/capsule/test/crack/000.png capsule
 """
 
 import os
@@ -37,15 +41,16 @@ REPORTS_DIR.mkdir(exist_ok=True)
 # 현재 보유한 소량의 샘플 이미지 점수 분포(0.49~0.68 구간)를 바탕으로 잡은 임시 기준이며,
 # 실제 생산 데이터가 쌓이면 재보정이 필요하다 (9주차 의사결정 문서화에 기록할 것).
 SEVERITY_GUIDE = """
-anomaly_score 기준 심각도 판단 가이드 (0.50이 정상/이상 판정 경계):
-- 0.50 미만         : 정상 (불량 아님)
-- 0.50 이상 0.60 미만: 경미한 이상 (육안 재확인 권장)
+anomaly_score 기준 심각도 판단 가이드:
+정상/이상 판정은 검사 결과의 is_anomaly(카테고리별 캘리브레이션 임계값 threshold 기준)를 그대로 따른다.
+- is_anomaly=False          : 정상 (불량 아님)
+- 임계값 이상 0.60 미만     : 경미한 이상 (육안 재확인 권장)
 - 0.60 이상 0.70 미만: 심각한 이상 (라인에서 제외 필요)
 - 0.70 이상         : 매우 심각한 이상 (즉시 라인 중단 검토)
 """
 
 
-def build_crew(image_path: str) -> Crew:
+def build_crew(image_path: str, category: str = "bottle") -> Crew:
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError(
             "OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 만들고 "
@@ -94,8 +99,11 @@ def build_crew(image_path: str) -> Crew:
     )
 
     inspect_task = Task(
-        description=f"이미지 파일 '{image_path}'를 inspect_image 도구로 검사하라.",
-        expected_output="filename, anomaly_score, is_anomaly가 포함된 검사 결과 문자열",
+        description=(
+            f"이미지 파일 '{image_path}'를 inspect_image 도구로 검사하라. "
+            f"image_path='{image_path}', category='{category}'로 호출한다."
+        ),
+        expected_output="filename, category, anomaly_score, threshold, is_anomaly가 포함된 검사 결과 문자열",
         agent=inspector,
     )
 
@@ -127,8 +135,8 @@ def build_crew(image_path: str) -> Crew:
     )
 
 
-def run_pipeline(image_path: str) -> Path:
-    crew = build_crew(image_path)
+def run_pipeline(image_path: str, category: str = "bottle") -> Path:
+    crew = build_crew(image_path, category)
     result = crew.kickoff()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -140,12 +148,13 @@ def run_pipeline(image_path: str) -> Path:
 
 def main():
     if len(sys.argv) < 2:
-        print("사용법: python crew_pipeline.py <이미지_경로>")
-        print("예시:   python crew_pipeline.py ../bottle_bad.png")
+        print("사용법: python crew_pipeline.py <이미지_경로> [카테고리(기본: bottle)]")
+        print("예시:   python crew_pipeline.py /path/to/mvtec_ad/capsule/test/crack/000.png capsule")
         sys.exit(1)
 
     image_path = sys.argv[1]
-    report_path = run_pipeline(image_path)
+    category = sys.argv[2] if len(sys.argv) > 2 else "bottle"
+    report_path = run_pipeline(image_path, category)
     print(f"\n{'=' * 60}")
     print(f"보고서가 저장되었습니다: {report_path}")
     print(f"{'=' * 60}")

@@ -1,4 +1,5 @@
-langchain
-langchain-openai
-langchain-core
-python-dotenv
+# create_agent API는 LangChain 1.x 기준 (0.x에서는 동작하지 않음)
+langchain>=1.0,<2.0
+langchain-openai>=1.0,<2.0
+langchain-core>=1.0,<2.0
+python-dotenv>=1.0

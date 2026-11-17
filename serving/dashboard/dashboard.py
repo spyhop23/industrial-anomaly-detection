@@ -12,6 +12,7 @@
        pip install -r ../requirements.txt -r ../agent/requirements-agent.txt -r ../crew/requirements-crew.txt -r requirements-dashboard.txt
     2. .env.example을 복사해 .env 파일을 만들고 OPENAI_API_KEY=sk-... 설정
        (agent/.env 또는 crew/.env를 이미 만들어뒀다면 같은 키를 그대로 복사해도 된다)
+    3. serving/ 폴더에서 추론 서버 실행: uvicorn app:app --port 8000
 
 실행 (반드시 serving/dashboard 폴더 안에서):
     cd serving/dashboard
@@ -95,6 +96,7 @@ with tab_chat:
 with tab_inspect:
     st.markdown("이미지를 올리면 **검사 → 분석 → 보고서 작성** 3개 에이전트가 순서대로 실행됩니다.")
 
+    category = st.selectbox("제품 카테고리", ["bottle", "capsule"], help="추론 서버에 해당 카테고리 모델이 로드되어 있어야 합니다.")
     uploaded_file = st.file_uploader("검사할 이미지", type=["png", "jpg", "jpeg"])
 
     if uploaded_file is not None:
@@ -109,7 +111,7 @@ with tab_inspect:
 
             try:
                 with st.spinner("3개 에이전트가 순서대로 작업 중입니다... (검사 → 분석 → 보고서 작성)"):
-                    report_path = run_pipeline(tmp_path)
+                    report_path = run_pipeline(tmp_path, category)
                 report_text = report_path.read_text(encoding="utf-8")
             except RuntimeError as e:
                 st.error(str(e))
